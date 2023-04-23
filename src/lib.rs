@@ -1,6 +1,7 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
+// Copyright 2013 The Rust Project Developers.
+// Copyright 2023 Saul Hazledine.
+// See the COPYRIGHT file at the top-level directory of this
+// distribution.
 //
 // Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
 // http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -19,7 +20,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! bufstream = "0.1"
+//! bufstream = "0.3"
 //! ```
 //!
 //! ```no_run
@@ -34,40 +35,9 @@
 //! buf.write(&[0; 1024]).unwrap();
 //! ```
 //!
-//! # Async I/O
-//!
-//! This crate optionally can support async I/O streams with the [Tokio stack] via
-//! the `tokio` feature of this crate:
-//!
-//! [Tokio stack]: https://tokio.rs/
-//!
-//! ```toml
-//! bufstream = { version = "0.2", features = ["tokio"] }
-//! ```
-//!
-//! All methods are internally capable of working with streams that may return
-//! [`ErrorKind::WouldBlock`] when they're not ready to perform the particular
-//! operation.
-//!
-//! [`ErrorKind::WouldBlock`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html
-//!
-//! Note that care needs to be taken when using these objects, however. The
-//! Tokio runtime, in particular, requires that data is fully flushed before
-//! dropping streams. For compatibility with blocking streams all streams are
-//! flushed/written when they are dropped, and this is not always a suitable
-//! time to perform I/O. If I/O streams are flushed before drop, however, then
-//! these operations will be a noop.
-
-#[cfg(feature = "tokio")] extern crate futures;
-#[cfg(feature = "tokio")] #[macro_use] extern crate tokio_io;
-
 use std::fmt;
 use std::io::prelude::*;
 use std::io::{self, BufReader, BufWriter, Seek, SeekFrom};
-use std::error;
-
-#[cfg(feature = "tokio")] use futures::{Async, Poll};
-#[cfg(feature = "tokio")] use tokio_io::{AsyncRead, AsyncWrite};
 
 const DEFAULT_BUF_SIZE: usize = 8 * 1024;
 
@@ -81,7 +51,7 @@ const DEFAULT_BUF_SIZE: usize = 8 * 1024;
 /// The output buffer will be written out when this stream is dropped.
 #[derive(Debug)]
 pub struct BufStream<S: Write> {
-    inner: BufReader<InternalBufWriter<S>>
+    inner: BufReader<InternalBufWriter<S>>,
 }
 
 /// An error returned by `into_inner` which combines an error that
@@ -94,21 +64,21 @@ impl<W> IntoInnerError<W> {
     /// Returns the error which caused the call to `into_inner()` to fail.
     ///
     /// This error was returned when attempting to write the internal buffer.
-    pub fn error(&self) -> &io::Error { &self.1 }
+    pub fn error(&self) -> &io::Error {
+        &self.1
+    }
     /// Returns the buffered writer instance which generated the error.
     ///
     /// The returned object can be used for error recovery, such as
     /// re-inspecting the buffer.
-    pub fn into_inner(self) -> W { self.0 }
+    pub fn into_inner(self) -> W {
+        self.0
+    }
 }
 
 impl<W> From<IntoInnerError<W>> for io::Error {
-    fn from(iie: IntoInnerError<W>) -> io::Error { iie.1 }
-}
-
-impl<W: fmt::Debug> error::Error for IntoInnerError<W> {
-    fn description(&self) -> &str {
-        error::Error::description(self.error())
+    fn from(iie: IntoInnerError<W>) -> io::Error {
+        iie.1
     }
 }
 
@@ -151,8 +121,7 @@ impl<S: Seek + Write> Seek for InternalBufWriter<S> {
 impl<S: Read + Write> BufStream<S> {
     /// Creates a new buffered stream with explicitly listed capacities for the
     /// reader/writer buffer.
-    pub fn with_capacities(reader_cap: usize, writer_cap: usize, inner: S)
-                           -> BufStream<S> {
+    pub fn with_capacities(reader_cap: usize, writer_cap: usize, inner: S) -> BufStream<S> {
         let writer = BufWriter::with_capacity(writer_cap, inner);
         let internal_writer = InternalBufWriter(Some(writer));
         let reader = BufReader::with_capacity(reader_cap, internal_writer);
@@ -189,10 +158,10 @@ impl<S: Read + Write> BufStream<S> {
             let InternalBufWriter(ref mut w) = *self.inner.get_mut();
             let (e, w2) = match w.take().unwrap().into_inner() {
                 Ok(s) => return Ok(s),
-                Err(err) => {
-                    (io::Error::new(err.error().kind(), err.error().to_string()),
-                     err.into_inner())
-                }
+                Err(err) => (
+                    io::Error::new(err.error().kind(), err.error().to_string()),
+                    err.into_inner(),
+                ),
             };
             *w = Some(w2);
             e
@@ -202,8 +171,12 @@ impl<S: Read + Write> BufStream<S> {
 }
 
 impl<S: Read + Write> BufRead for BufStream<S> {
-    fn fill_buf(&mut self) -> io::Result<&[u8]> { self.inner.fill_buf() }
-    fn consume(&mut self, amt: usize) { self.inner.consume(amt) }
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        self.inner.fill_buf()
+    }
+    fn consume(&mut self, amt: usize) {
+        self.inner.consume(amt)
+    }
     fn read_until(&mut self, byte: u8, buf: &mut Vec<u8>) -> io::Result<usize> {
         self.inner.read_until(byte, buf)
     }
@@ -233,45 +206,10 @@ impl<S: Seek + Write> Seek for BufStream<S> {
     }
 }
 
-#[cfg(feature = "tokio")]
-impl<S: AsyncRead + AsyncWrite> BufStream<S> {
-    /// Unwraps this `BufStream`, asynchronously returning the underlying stream.
-    ///
-    /// The internal write buffer is written out before returning the stream.
-    /// Any leftover data in the read buffer is lost.
-    pub fn poll_into_inner(&mut self) -> Poll<S, io::Error> {
-        // Do the flush asynchronously so that the underlying BufWriter will
-        // skip its blocking flush call
-        match self.poll_flush() {
-            Ok(Async::Ready(_)) => {
-                let InternalBufWriter(ref mut w) = *self.inner.get_mut();
-                match w.take().unwrap().into_inner() {
-                    Err(err) => Err(io::Error::new(err.error().kind(), err.error().to_string())),
-                    Ok(s) => Ok(Async::Ready(s)),
-                }
-            }
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(err) => Err(err),
-        }
-    }
-}
-
-#[cfg(feature = "tokio")]
-impl<S: AsyncRead + AsyncWrite> AsyncRead for BufStream<S> {}
-
-#[cfg(feature = "tokio")]
-impl<S: AsyncRead + AsyncWrite> AsyncWrite for BufStream<S> {
-    fn shutdown(&mut self) -> Poll<(), io::Error> {
-        try_nb!(self.flush());
-        let mut inner = self.inner.get_mut().0.as_mut().unwrap();
-        inner.shutdown()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::io::prelude::*;
     use std::io;
+    use std::io::prelude::*;
 
     use super::BufStream;
     // This is just here to make sure that we don't infinite loop in the
@@ -281,12 +219,18 @@ mod tests {
         struct S;
 
         impl Write for S {
-            fn write(&mut self, b: &[u8]) -> io::Result<usize> { Ok(b.len()) }
-            fn flush(&mut self) -> io::Result<()> { Ok(()) }
+            fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
         }
 
         impl Read for S {
-            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> { Ok(0) }
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Ok(0)
+            }
         }
 
         let mut stream = BufStream::new(S);
